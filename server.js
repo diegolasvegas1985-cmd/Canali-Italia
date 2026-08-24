@@ -1,11 +1,12 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 
+// Link fisso con il ramo master e la tua lista italy.m3u
 const M3U_URL = process.env.M3U_URL || 'https://raw.githubusercontent.com/diegolasvegas1985-cmd/Canali-Italia/refs/heads/master/italy.m3u';
 
 const builder = new addonBuilder({
     id: 'org.diegolasvegas.tvitalia',
-    version: '1.0.2',
+    version: '1.0.4',
     name: 'TV Italia Live',
     description: 'Canali TV italiani in chiaro',
     resources: ['catalog', 'stream'],
@@ -21,6 +22,7 @@ const builder = new addonBuilder({
 
 async function parseM3U() {
     try {
+        console.log('Scaricamento M3U da:', M3U_URL);
         const response = await axios.get(M3U_URL, { timeout: 10000 });
         const lines = response.data.split(/\r?\n/);
         const channels = [];
@@ -43,6 +45,7 @@ async function parseM3U() {
                 currentChannel = null;
             }
         }
+        console.log(`Trovati ${channels.length} canali.`);
         return channels;
     } catch (error) {
         console.error('Errore download M3U:', error.message);
@@ -58,10 +61,7 @@ builder.defineCatalogHandler(async (args) => {
             type: 'movie',
             name: ch.name,
             poster: ch.logo || 'https://via.placeholder.com/300x450?text=TV+Italia',
-            description: `Guarda ${ch.name} in diretta`,
-            behaviorHints: {
-                notWebReady: true
-            }
+            description: `Guarda ${ch.name} in diretta`
         }));
         return { metas };
     }
@@ -69,12 +69,12 @@ builder.defineCatalogHandler(async (args) => {
 });
 
 builder.defineStreamHandler(async (args) => {
-    console.ch = 'Richiesta stream per ID: ' + args.id;
+    console.log('Richiesta stream per ID:', args.id);
     const channels = await parseM3U();
     const channel = channels.find(ch => ch.id === args.id);
 
     if (channel) {
-        console.log('Trovato canale:', channel.name, '->', channel.url);
+        console.log('Canale trovato:', channel.name);
         return {
             streams: [
                 {
