@@ -1,0 +1,13 @@
+{
+  "name": "stremio-iptv-italia",
+  "version": "1.0.0",
+  "description": "Addon Stremio per canali TV in chiaro",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "stremio-addon-sdk": "^1.6.0"
+  }
+}
