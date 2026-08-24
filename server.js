@@ -1,11 +1,12 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 
+// Link fisso al ramo main e la tua lista italy.m3u
 const M3U_URL = process.env.M3U_URL || 'https://raw.githubusercontent.com/diegolasvegas1985-cmd/Canali-Italia/refs/heads/main/italy.m3u';
 
 const builder = new addonBuilder({
     id: 'org.diegolasvegas.tvitalia',
-    version: '1.0.7',
+    version: '1.0.8',
     name: 'TV Italia Live',
     description: 'Canali TV italiani in chiaro',
     resources: ['catalog', 'stream'],
@@ -35,6 +36,7 @@ async function parseM3U() {
                 
                 const name = nameMatch ? nameMatch[1].trim() : 'Canale TV';
                 const logo = logoMatch ? logoMatch[1] : '';
+                // Creazione ID univoco basato sul nome per evitare collisioni
                 const id = 'tv_' + Buffer.from(name).toString('hex').slice(0, 16);
 
                 currentChannel = { id, name, logo };
@@ -60,7 +62,11 @@ builder.defineCatalogHandler(async (args) => {
             type: 'movie',
             name: ch.name,
             poster: ch.logo || 'https://via.placeholder.com/300x450?text=TV+Italia',
-            description: `Guarda ${ch.name} in diretta`
+            description: `Guarda ${ch.name} in diretta`,
+            // AGGIUNTA FONDAMENTALE: Questo dice a Stremio di non cercare i metadati e aprire direttamente la finestra dello stream
+            behaviorHints: {
+                isImplicit: true
+            }
         }));
         return { metas };
     }
@@ -73,7 +79,7 @@ builder.defineStreamHandler(async (args) => {
     const channel = channels.find(ch => ch.id === args.id);
 
     if (channel) {
-        console.log('Canale trovato:', channel.name);
+        console.log('Canale trovato:', channel.name, '-> URL:', channel.url);
         return {
             streams: [
                 {
