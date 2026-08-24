@@ -1,150 +1,528 @@
-const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
-const https = require('https');
-const http = require('http');
+const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
+const fs = require("fs");
+const path = require("path");
 
 const PORT = process.env.PORT || 7000;
-const PLAYLIST_URL = process.env.PLAYLIST_URL || 'https://raw.githubusercontent.com/diegolasvegas1985-cmd/Canali-Italia/main/italy.m3u';
-const CACHE_SECONDS = Number(process.env.CACHE_SECONDS || 300);
+const PLAYLIST_FILE = path.join(__dirname, "italy.m3u");
 
-let cache = { loadedAt: 0, channels: [] };
+let cache = {
+    time: 0,
+    channels: []
+};
 
-function fetchText(url, redirects = 0) {
-  if (redirects > 5) return Promise.reject(new Error('Too many redirects'));
-  return new Promise((resolve, reject) => {
-    const client = url.startsWith('https://') ? https : http;
-    const req = client.get(url, { headers: { 'User-Agent': 'Stremio-M3U-Addon/1.0' } }, res => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        const next = new URL(res.headers.location, url).toString();
-        return fetchText(next, redirects + 1).then(resolve, reject);
-      }
-      if (res.statusCode !== 200) {
-        res.resume();
-        return reject(new Error(`Playlist HTTP ${res.statusCode}`));
-      }
-      let data = '';
-      res.setEncoding('utf8');
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => resolve(data));
-    });
-    req.setTimeout(20000, () => req.destroy(new Error('Playlist timeout')));
-    req.on('error', reject);
-  });
+const CACHE_TIME = 5 * 60 * 1000;
+
+// ----------------------------------------------------
+// ID CANALE
+// ----------------------------------------------------
+
+function makeId(url) {
+    return Buffer
+        .from(url, "utf8")
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
 }
+
+// ----------------------------------------------------
+// PARSE ATTRIBUTI M3U
+// ----------------------------------------------------
 
 function parseAttributes(line) {
-  const attrs = {};
-  const re = /([\w-]+)="([^"]*)"/g;
-  let m;
-  while ((m = re.exec(line)) !== null) attrs[m[1]] = m[2];
-  return attrs;
-}
+    const attrs = {};
+    const regex = /([\w-]+)="([^"]*)"/g;
 
-function parseM3U(text) {
-  const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
-  const channels = [];
-  let pending = null;
+    let match;
 
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) continue;
-
-    if (line.startsWith('#EXTINF')) {
-      const attrs = parseAttributes(line);
-      const comma = line.indexOf(',');
-      const name = comma >= 0 ? line.slice(comma + 1).trim() : (attrs['tvg-name'] || 'Canale');
-      pending = {
-        name: name || attrs['tvg-name'] || 'Canale',
-        logo: attrs['tvg-logo'] || '',
-        group: attrs['group-title'] || 'Canali Italia',
-        tvgId: attrs['tvg-id'] || ''
-      };
-      continue;
+    while ((match = regex.exec(line)) !== null) {
+        attrs[match[1]] = match[2];
     }
 
-    if (!line.startsWith('#') && pending) {
-      if (/^https?:\/\//i.test(line)) {
-        channels.push({ ...pending, url: line });
-      }
-      pending = null;
+    return attrs;
+}
+
+// ----------------------------------------------------
+// CATEGORIA AUTOMATICA
+// ----------------------------------------------------
+
+function detectCategory(name, tvgId) {
+
+    const text = (
+        (name || "") +
+        " " +
+        (tvgId || "")
+    ).toLowerCase();
+
+    // RAI
+    if (
+        text.includes("rai ") ||
+        text.startsWith("rai") ||
+        text.includes("raimovie") ||
+        text.includes("raipremium") ||
+        text.includes("rai news") ||
+        text.includes("rai sport") ||
+        text.includes("rai yoyo") ||
+        text.includes("rai gulp")
+    ) {
+        return "Rai";
     }
-  }
-  return channels;
+
+    // MEDIASET
+    if (
+        text.includes("canale 5") ||
+        text.includes("italia 1") ||
+        text.includes("rete 4") ||
+        text.includes("20 mediaset") ||
+        text.includes("iris") ||
+        text.includes("la5") ||
+        text.includes("la 5") ||
+        text.includes("mediaset")
+    ) {
+        return "Mediaset";
+    }
+
+    // NEWS
+    if (
+        text.includes("tg") ||
+        text.includes("news") ||
+        text.includes("sky tg") ||
+        text.includes("all news") ||
+        text.includes("class cnbc") ||
+        text.includes("rainews")
+    ) {
+        return "News";
+    }
+
+    // SPORT
+    if (
+        text.includes("sport") ||
+        text.includes("calcio") ||
+        text.includes("football") ||
+        text.includes("tennis") ||
+        text.includes("motogp") ||
+        text.includes("formula 1") ||
+        text.includes("f1")
+    ) {
+        return "Sport";
+    }
+
+    // CINEMA
+    if (
+        text.includes("movie") ||
+        text.includes("cinema") ||
+        text.includes("film")
+    ) {
+        return "Cinema";
+    }
+
+    // INTRATTENIMENTO
+    if (
+        text.includes("real time") ||
+        text.includes("dmax") ||
+        text.includes("focus") ||
+        text.includes("nove") ||
+        text.includes("cielo") ||
+        text.includes("tv8") ||
+        text.includes("discovery") ||
+        text.includes("food") ||
+        text.includes("giallo") ||
+        text.includes("top crime")
+    ) {
+        return "Intrattenimento";
+    }
+
+    return "Altri";
 }
 
-async function getChannels() {
-  const fresh = cache.channels.length && (Date.now() - cache.loadedAt < CACHE_SECONDS * 1000);
-  if (fresh) return cache.channels;
+// ----------------------------------------------------
+// PARSE M3U
+// ----------------------------------------------------
 
-  const text = await fetchText(PLAYLIST_URL);
-  const channels = parseM3U(text);
-  cache = { loadedAt: Date.now(), channels };
-  console.log(`Playlist caricata: ${channels.length} canali`);
-  return channels;
+function parseM3U(data) {
+
+    const lines = data.split(/\r?\n/);
+
+    const channels = [];
+
+    let current = null;
+
+    for (let i = 0; i < lines.length; i++) {
+
+        const line = lines[i].trim();
+
+        if (!line) {
+            continue;
+        }
+
+        if (line.startsWith("#EXTINF")) {
+
+            const attrs = parseAttributes(line);
+
+            const comma = line.indexOf(",");
+
+            let name = "";
+
+            if (comma !== -1) {
+                name = line
+                    .substring(comma + 1)
+                    .trim();
+            }
+
+            if (!name) {
+                name =
+                    attrs["tvg-name"] ||
+                    attrs["tvg-id"] ||
+                    "Canale";
+            }
+
+            current = {
+                name: name,
+                logo: attrs["tvg-logo"] || "",
+                tvgId: attrs["tvg-id"] || "",
+                group: attrs["group-title"] || ""
+            };
+
+            continue;
+        }
+
+        // URL dello stream
+        if (
+            current &&
+            !line.startsWith("#") &&
+            /^https?:\/\//i.test(line)
+        ) {
+
+            const category = detectCategory(
+                current.name,
+                current.tvgId
+            );
+
+            channels.push({
+                id: makeId(line),
+                name: current.name,
+                logo: current.logo,
+                tvgId: current.tvgId,
+                group: current.group,
+                category: category,
+                url: line
+            });
+
+            current = null;
+        }
+    }
+
+    return channels;
 }
 
-function idFor(index, channel) {
-  return Buffer.from(`${index}|${channel.url}`, 'utf8').toString('base64url');
+// ----------------------------------------------------
+// CARICA PLAYLIST
+// ----------------------------------------------------
+
+function getChannels() {
+
+    const now = Date.now();
+
+    if (
+        cache.channels.length > 0 &&
+        now - cache.time < CACHE_TIME
+    ) {
+        return cache.channels;
+    }
+
+    if (!fs.existsSync(PLAYLIST_FILE)) {
+
+        console.error(
+            "ERRORE: italy.m3u non trovato:",
+            PLAYLIST_FILE
+        );
+
+        return [];
+    }
+
+    try {
+
+        const data = fs.readFileSync(
+            PLAYLIST_FILE,
+            "utf8"
+        );
+
+        const channels = parseM3U(data);
+
+        cache = {
+            time: now,
+            channels: channels
+        };
+
+        console.log(
+            `Playlist caricata: ${channels.length} canali`
+        );
+
+        return channels;
+
+    } catch (error) {
+
+        console.error(
+            "Errore lettura M3U:",
+            error
+        );
+
+        return [];
+    }
 }
 
-function findChannel(channels, id) {
-  for (let i = 0; i < channels.length; i++) {
-    if (idFor(i, channels[i]) === id) return { channel: channels[i], index: i };
-  }
-  return null;
-}
+// ----------------------------------------------------
+// CATALOGHI
+// ----------------------------------------------------
 
-const builder = new addonBuilder({
-  id: 'com.diegolasvegas.canaliitalia',
-  version: '1.0.0',
-  name: 'Canali Italia',
-  description: 'Canali TV italiani da playlist M3U personale.',
-  resources: ['catalog', 'stream'],
-  types: ['tv'],
-  catalogs: [
-    { type: 'tv', id: 'canali-italia', name: 'Canali Italia' }
-  ],
-  behaviorHints: { configurable: false, configurationRequired: false }
-});
+const catalogs = [
 
-builder.defineCatalogHandler(async () => {
-  try {
-    const channels = await getChannels();
+    {
+        type: "tv",
+        id: "tutti",
+        name: "🇮🇹 Tutti i canali"
+    },
+
+    {
+        type: "tv",
+        id: "rai",
+        name: "📺 Rai"
+    },
+
+    {
+        type: "tv",
+        id: "mediaset",
+        name: "📺 Mediaset"
+    },
+
+    {
+        type: "tv",
+        id: "news",
+        name: "📰 News"
+    },
+
+    {
+        type: "tv",
+        id: "sport",
+        name: "🏆 Sport"
+    },
+
+    {
+        type: "tv",
+        id: "cinema",
+        name: "🎬 Cinema"
+    },
+
+    {
+        type: "tv",
+        id: "intrattenimento",
+        name: "🎭 Intrattenimento"
+    },
+
+    {
+        type: "tv",
+        id: "altri",
+        name: "📡 Altri"
+    }
+];
+
+// ----------------------------------------------------
+// MANIFEST
+// ----------------------------------------------------
+
+const manifest = {
+
+    id: "com.diego.canaliitalia",
+
+    version: "1.1.0",
+
+    name: "🇮🇹 Canali Italia",
+
+    description:
+        "Canali TV italiani personali da playlist M3U",
+
+    resources: [
+        "catalog",
+        "stream"
+    ],
+
+    types: [
+        "tv"
+    ],
+
+    catalogs: catalogs
+};
+
+// ----------------------------------------------------
+// ADDON
+// ----------------------------------------------------
+
+const builder = new addonBuilder(manifest);
+
+// ----------------------------------------------------
+// CATALOGO
+// ----------------------------------------------------
+
+builder.defineCatalogHandler(async ({ type, id }) => {
+
+    console.log(
+        `Catalogo richiesto: ${type}/${id}`
+    );
+
+    const channels = getChannels();
+
+    let filtered = channels;
+
+    switch (id) {
+
+        case "rai":
+            filtered = channels.filter(
+                c => c.category === "Rai"
+            );
+            break;
+
+        case "mediaset":
+            filtered = channels.filter(
+                c => c.category === "Mediaset"
+            );
+            break;
+
+        case "news":
+            filtered = channels.filter(
+                c => c.category === "News"
+            );
+            break;
+
+        case "sport":
+            filtered = channels.filter(
+                c => c.category === "Sport"
+            );
+            break;
+
+        case "cinema":
+            filtered = channels.filter(
+                c => c.category === "Cinema"
+            );
+            break;
+
+        case "intrattenimento":
+            filtered = channels.filter(
+                c => c.category === "Intrattenimento"
+            );
+            break;
+
+        case "altri":
+            filtered = channels.filter(
+                c => c.category === "Altri"
+            );
+            break;
+
+        case "tutti":
+        default:
+            break;
+    }
+
+    console.log(
+        `Canali restituiti: ${filtered.length}`
+    );
+
     return {
-      metas: channels.map((c, i) => ({
-        id: idFor(i, c),
-        type: 'tv',
-        name: c.name,
-        poster: c.logo || undefined,
-        posterShape: 'landscape',
-        description: c.group
-      }))
+
+        metas: filtered.map(channel => ({
+
+            id: channel.id,
+
+            type: "tv",
+
+            name: channel.name,
+
+            poster:
+                channel.logo ||
+                undefined,
+
+            posterShape: "landscape",
+
+            description:
+                channel.category +
+                (
+                    channel.group
+                        ? "\n" + channel.group
+                        : ""
+                )
+        }))
     };
-  } catch (err) {
-    console.error('Catalog error:', err.message);
-    return { metas: [] };
-  }
 });
+
+// ----------------------------------------------------
+// STREAM
+// ----------------------------------------------------
 
 builder.defineStreamHandler(async ({ id }) => {
-  try {
-    const channels = await getChannels();
-    const found = findChannel(channels, id);
-    if (!found) return { streams: [] };
+
+    console.log(
+        `Stream richiesto: ${id}`
+    );
+
+    const channels = getChannels();
+
+    const channel = channels.find(
+        c => c.id === id
+    );
+
+    if (!channel) {
+
+        console.error(
+            "Canale non trovato:",
+            id
+        );
+
+        return {
+            streams: []
+        };
+    }
+
+    console.log(
+        `Riproduzione: ${channel.name}`
+    );
 
     return {
-      streams: [{
-        name: found.channel.name,
-        title: found.channel.group,
-        url: found.channel.url,
-        behaviorHints: { notWebReady: true }
-      }]
+
+        streams: [
+
+            {
+
+                name: channel.name,
+
+                title:
+                    channel.category,
+
+                url: channel.url,
+
+                behaviorHints: {
+
+                    notWebReady: true
+
+                }
+            }
+        ]
     };
-  } catch (err) {
-    console.error('Stream error:', err.message);
-    return { streams: [] };
-  }
 });
 
-serveHTTP(builder.getInterface(), { port: PORT });
-console.log(`Canali Italia addon running on port ${PORT}`);
+// ----------------------------------------------------
+// SERVER
+// ----------------------------------------------------
+
+serveHTTP(
+    builder.getInterface(),
+    {
+        port: PORT
+    }
+);
+
+console.log(
+    `🇮🇹 Canali Italia addon avviato sulla porta ${PORT}`
+);
+
+console.log(
+    `Playlist: ${PLAYLIST_FILE}`
+);
