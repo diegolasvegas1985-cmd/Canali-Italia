@@ -5,14 +5,14 @@ const M3U_URL = process.env.M3U_URL || 'https://raw.githubusercontent.com/diegol
 
 const builder = new addonBuilder({
     id: 'org.diegolasvegas.tvitalia',
-    version: '1.0.9',
+    version: '1.1.0',
     name: 'TV Italia Live',
     description: 'Canali TV italiani in chiaro',
     resources: ['catalog', 'meta', 'stream'],
-    types: ['movie'],
+    types: ['tv'],
     catalogs: [
         {
-            type: 'movie',
+            type: 'tv',
             id: 'tv_italia_catalog',
             name: 'Canali Italia'
         }
@@ -53,11 +53,11 @@ async function parseM3U() {
 }
 
 builder.defineCatalogHandler(async (args) => {
-    if (args.type === 'movie' && args.id === 'tv_italia_catalog') {
+    if (args.type === 'tv' && args.id === 'tv_italia_catalog') {
         const channels = await parseM3U();
         const metas = channels.map(ch => ({
             id: ch.id,
-            type: 'movie',
+            type: 'tv',
             name: ch.name,
             poster: ch.logo || 'https://via.placeholder.com/300x450?text=TV+Italia',
             description: `Guarda ${ch.name} in diretta`
@@ -67,19 +67,28 @@ builder.defineCatalogHandler(async (args) => {
     return { metas: [] };
 });
 
-// GESTORE METADATI: Fornisce a Stremio le informazioni del canale quando viene cliccato
+// GESTORE METADATI TV: Strutturato con un "episodio" fittizio per soddisfare Stremio
 builder.defineMetaHandler(async (args) => {
-    if (args.type === 'movie') {
+    if (args.type === 'tv') {
         const channels = await parseM3U();
         const channel = channels.find(ch => ch.id === args.id);
         if (channel) {
             return {
                 meta: {
                     id: channel.id,
-                    type: 'movie',
+                    type: 'tv',
                     name: channel.name,
                     poster: channel.logo || 'https://via.placeholder.com/300x450?text=TV+Italia',
-                    description: `Canale in diretta TV: ${channel.name}`
+                    description: `Canale in diretta TV: ${channel.name}`,
+                    videos: [
+                        {
+                            id: channel.id,
+                            title: `${channel.name} - Diretta`,
+                            released: new Date().toISOString(),
+                            season: 1,
+                            episode: 1
+                        }
+                    ]
                 }
             };
         }
