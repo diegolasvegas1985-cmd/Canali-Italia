@@ -1,15 +1,14 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 
-// Link fisso al ramo main e la tua lista italy.m3u
 const M3U_URL = process.env.M3U_URL || 'https://raw.githubusercontent.com/diegolasvegas1985-cmd/Canali-Italia/refs/heads/main/italy.m3u';
 
 const builder = new addonBuilder({
     id: 'org.diegolasvegas.tvitalia',
-    version: '1.0.8',
+    version: '1.0.9',
     name: 'TV Italia Live',
     description: 'Canali TV italiani in chiaro',
-    resources: ['catalog', 'stream'],
+    resources: ['catalog', 'meta', 'stream'],
     types: ['movie'],
     catalogs: [
         {
@@ -36,7 +35,6 @@ async function parseM3U() {
                 
                 const name = nameMatch ? nameMatch[1].trim() : 'Canale TV';
                 const logo = logoMatch ? logoMatch[1] : '';
-                // Creazione ID univoco basato sul nome per evitare collisioni
                 const id = 'tv_' + Buffer.from(name).toString('hex').slice(0, 16);
 
                 currentChannel = { id, name, logo };
@@ -62,15 +60,31 @@ builder.defineCatalogHandler(async (args) => {
             type: 'movie',
             name: ch.name,
             poster: ch.logo || 'https://via.placeholder.com/300x450?text=TV+Italia',
-            description: `Guarda ${ch.name} in diretta`,
-            // AGGIUNTA FONDAMENTALE: Questo dice a Stremio di non cercare i metadati e aprire direttamente la finestra dello stream
-            behaviorHints: {
-                isImplicit: true
-            }
+            description: `Guarda ${ch.name} in diretta`
         }));
         return { metas };
     }
     return { metas: [] };
+});
+
+// GESTORE METADATI: Fornisce a Stremio le informazioni del canale quando viene cliccato
+builder.defineMetaHandler(async (args) => {
+    if (args.type === 'movie') {
+        const channels = await parseM3U();
+        const channel = channels.find(ch => ch.id === args.id);
+        if (channel) {
+            return {
+                meta: {
+                    id: channel.id,
+                    type: 'movie',
+                    name: channel.name,
+                    poster: channel.logo || 'https://via.placeholder.com/300x450?text=TV+Italia',
+                    description: `Canale in diretta TV: ${channel.name}`
+                }
+            };
+        }
+    }
+    return { meta: null };
 });
 
 builder.defineStreamHandler(async (args) => {
@@ -79,7 +93,7 @@ builder.defineStreamHandler(async (args) => {
     const channel = channels.find(ch => ch.id === args.id);
 
     if (channel) {
-        console.log('Canale trovato:', channel.name, '-> URL:', channel.url);
+        console.log('Canale trovato:', channel.name);
         return {
             streams: [
                 {
