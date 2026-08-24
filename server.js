@@ -1,18 +1,18 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 
-const M3U_URL = process.env.M3U_URL || 'https://raw.githubusercontent.com/diegolasvegas1985-cmd/Canali-Italia/refs/heads/master/italy.m3u';
+const M3U_URL = process.env.M3U_URL || 'https://raw.githubusercontent.com/diegolasvegas1985-cmd/Canali-Italia/refs/heads/main/italy.m3u';
 
 const builder = new addonBuilder({
     id: 'org.diegolasvegas.tvitalia',
-    version: '1.0.5',
+    version: '1.0.7',
     name: 'TV Italia Live',
     description: 'Canali TV italiani in chiaro',
     resources: ['catalog', 'stream'],
-    types: ['tv'],
+    types: ['movie'],
     catalogs: [
         {
-            type: 'tv',
+            type: 'movie',
             id: 'tv_italia_catalog',
             name: 'Canali Italia'
         }
@@ -53,11 +53,11 @@ async function parseM3U() {
 }
 
 builder.defineCatalogHandler(async (args) => {
-    if (args.type === 'tv' && args.id === 'tv_italia_catalog') {
+    if (args.type === 'movie' && args.id === 'tv_italia_catalog') {
         const channels = await parseM3U();
         const metas = channels.map(ch => ({
             id: ch.id,
-            type: 'tv',
+            type: 'movie',
             name: ch.name,
             poster: ch.logo || 'https://via.placeholder.com/300x450?text=TV+Italia',
             description: `Guarda ${ch.name} in diretta`
