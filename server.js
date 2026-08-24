@@ -1,12 +1,12 @@
 const { addonBuilder, serveHTTP } = require('stremio-addon-sdk');
 const axios = require('axios');
 
-// URL predefinito della tua lista (modificabile anche tramite variabile d'ambiente M3U_URL su Render)
-const M3U_URL = process.env.M3U_URL || 'https://raw.githubusercontent.com/diegolasvegas1985-cmd/Canali-Italia/refs/heads/main/stremio.m3u';
+// Utilizza la lista italy.m3u attiva se M3U_URL non è impostato su Render
+const M3U_URL = process.env.M3U_URL || 'https://raw.githubusercontent.com/diegolasvegas1985-cmd/Canali-Italia/refs/heads/main/italy.m3u';
 
 const builder = new addonBuilder({
     id: 'org.diegolasvegas.tvitalia',
-    version: '1.0.0',
+    version: '1.0.1',
     name: 'TV Italia Live',
     description: 'Canali TV italiani in chiaro',
     resources: ['catalog', 'stream'],
@@ -20,13 +20,13 @@ const builder = new addonBuilder({
     ]
 });
 
-// Funzione di parsing del file M3U
 async function parseM3U() {
     try {
-        const response = await axios.get(M3U_URL);
-        const lines = response.data.split('\n');
+        console.log('Recupero lista da:', M3U_URL);
+        const response = await axios.get(M3U_URL, { timeout: 10000 });
+        const lines = response.data.split(/\r?\n/);
         const channels = [];
-        let currentChannel = {};
+        let currentChannel = null;
 
         for (let line of lines) {
             line = line.trim();
@@ -34,43 +34,40 @@ async function parseM3U() {
                 const nameMatch = line.match(/,(.+)$/);
                 const logoMatch = line.match(/tvg-logo="([^"]+)"/);
                 
-                const name = nameMatch ? nameMatch[1].trim() : 'Canale Sconosciuto';
+                const name = nameMatch ? nameMatch[1].trim() : 'Canale TV';
                 const logo = logoMatch ? logoMatch[1] : '';
-                
-                // Genera un ID unico basato sul nome del canale
                 const id = 'tv_' + Buffer.from(name).toString('hex').slice(0, 16);
 
                 currentChannel = { id, name, logo };
-            } else if (line.startsWith('http')) {
-                if (currentChannel.name) {
-                    currentChannel.url = line;
-                    channels.push(currentChannel);
-                    currentChannel = {};
-                }
+            } else if (line.startsWith('http') && currentChannel) {
+                currentChannel.url = line;
+                channels.push(currentChannel);
+                currentChannel = null;
             }
         }
+        console.log(`Trovati ${channels.length} canali.`);
         return channels;
     } catch (error) {
-        console.error('Errore durante il recupero della lista M3U:', error.message);
+        console.error('Errore download M3U:', error.message);
         return [];
     }
 }
 
-// Handler per il catalogo (mostra la griglia dei canali)
-builder.defineCatalogHandler(async () => {
-    const channels = await parseM3U();
-    const metas = channels.map(ch => ({
-        id: ch.id,
-        type: 'tv',
-        name: ch.name,
-        poster: ch.logo || 'https://via.placeholder.com/300x450?text=TV',
-        description: `Streaming live di ${ch.name}`
-    }));
-
-    return { metas };
+builder.defineCatalogHandler(async (args) => {
+    if (args.type === 'tv' && args.id === 'tv_italia_catalog') {
+        const channels = await parseM3U();
+        const metas = channels.map(ch => ({
+            id: ch.id,
+            type: 'tv',
+            name: ch.name,
+            poster: ch.logo || 'https://via.placeholder.com/300x450?text=TV+Italia',
+            description: `Guarda ${ch.name} in diretta`
+        }));
+        return { metas };
+    }
+    return { metas: [] };
 });
 
-// Handler per lo streaming (fornisce il link del canale selezionato)
 builder.defineStreamHandler(async (args) => {
     const channels = await parseM3U();
     const channel = channels.find(ch => ch.id === args.id);
@@ -85,10 +82,8 @@ builder.defineStreamHandler(async (args) => {
             ]
         };
     }
-
     return { streams: [] };
 });
 
-// Avvio del server HTTP
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port });
