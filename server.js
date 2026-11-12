@@ -5,16 +5,16 @@ const M3U_URL = process.env.M3U_URL || 'https://raw.githubusercontent.com/diegol
 
 const builder = new addonBuilder({
     id: 'org.diegolasvegas.tvitalia',
-    version: '1.1.0',
+    version: '1.2.0',
     name: 'TV Italia Live',
-    description: 'Canali TV italiani in chiaro',
+    description: 'Canali TV italiani con menu zapping rapido',
     resources: ['catalog', 'meta', 'stream'],
-    types: ['tv'],
+    types: ['series'],
     catalogs: [
         {
-            type: 'tv',
+            type: 'series',
             id: 'tv_italia_catalog',
-            name: 'Canali Italia'
+            name: 'Canali Italia - Lista Canali'
         }
     ]
 });
@@ -35,9 +35,8 @@ async function parseM3U() {
                 
                 const name = nameMatch ? nameMatch[1].trim() : 'Canale TV';
                 const logo = logoMatch ? logoMatch[1] : '';
-                const id = 'tv_' + Buffer.from(name).toString('hex').slice(0, 16);
 
-                currentChannel = { id, name, logo };
+                currentChannel = { name, logo };
             } else if (line.startsWith('http') && currentChannel) {
                 currentChannel.url = line;
                 channels.push(currentChannel);
@@ -52,65 +51,78 @@ async function parseM3U() {
     }
 }
 
+// RESTITUISCE IL CONTENITORE PRINCIPALE NEL CATALOGO
 builder.defineCatalogHandler(async (args) => {
-    if (args.type === 'tv' && args.id === 'tv_italia_catalog') {
-        const channels = await parseM3U();
-        const metas = channels.map(ch => ({
-            id: ch.id,
-            type: 'tv',
-            name: ch.name,
-            poster: ch.logo || 'https://via.placeholder.com/300x450?text=TV+Italia',
-            description: `Guarda ${ch.name} in diretta`
-        }));
-        return { metas };
+    if (args.type === 'series' && args.id === 'tv_italia_catalog') {
+        return {
+            metas: [
+                {
+                    id: 'tv_italia_all_channels',
+                    type: 'series',
+                    name: 'TV Italiana - Elenco Canali',
+                    poster: 'https://via.placeholder.com/300x450?text=TV+Italia+Live',
+                    description: 'Tutti i canali TV italiani ordinati come episodi per il cambio rapido.'
+                }
+            ]
+        };
     }
     return { metas: [] };
 });
 
-// GESTORE METADATI TV: Strutturato con un "episodio" fittizio per soddisfare Stremio
+// TRASFORMA OGNI CANALE IN UN "EPISODIO" DELLA SERIE
 builder.defineMetaHandler(async (args) => {
-    if (args.type === 'tv') {
+    if (args.type === 'series' && args.id === 'tv_italia_all_channels') {
         const channels = await parseM3U();
-        const channel = channels.find(ch => ch.id === args.id);
-        if (channel) {
+        const videos = channels.map((ch, index) => {
+            const epNum = index + 1;
+            const formattedNum = epNum < 10 ? `0${epNum}` : `${epNum}`;
             return {
-                meta: {
-                    id: channel.id,
-                    type: 'tv',
-                    name: channel.name,
-                    poster: channel.logo || 'https://via.placeholder.com/300x450?text=TV+Italia',
-                    description: `Canale in diretta TV: ${channel.name}`,
-                    videos: [
-                        {
-                            id: channel.id,
-                            title: `${channel.name} - Diretta`,
-                            released: new Date().toISOString(),
-                            season: 1,
-                            episode: 1
-                        }
-                    ]
-                }
+                id: `tv_italia_all_channels:1:${epNum}`,
+                title: `${formattedNum} - ${ch.name}`,
+                released: new Date().toISOString(),
+                season: 1,
+                episode: epNum,
+                thumbnail: ch.logo || 'https://via.placeholder.com/300x170?text=TV'
             };
-        }
+        });
+
+        return {
+            meta: {
+                id: 'tv_italia_all_channels',
+                type: 'series',
+                name: 'TV Italiana - Elenco Canali',
+                poster: 'https://via.placeholder.com/300x450?text=TV+Italia+Live',
+                description: 'Seleziona un canale e usa il menu laterale degli episodi per fare zapping.',
+                videos: videos
+            }
+        };
     }
     return { meta: null };
 });
 
+// GESTISCE LO STREAMING IN BASE ALL'EPISODIO SCELTO
 builder.defineStreamHandler(async (args) => {
     console.log('Richiesta stream per ID:', args.id);
-    const channels = await parseM3U();
-    const channel = channels.find(ch => ch.id === args.id);
+    if (args.type === 'series') {
+        const parts = args.id.split(':');
+        if (parts.length === 3) {
+            const epNum = parseInt(parts[2], 10);
+            const channels = await parseM3U();
+            const channel = channels[epNum - 1]; // Indice array 0-based
 
-    if (channel) {
-        console.log('Canale trovato:', channel.name);
-        return {
-            streams: [
-                {
-                    title: `Diretta - ${channel.name}`,
-                    url: channel.url
-                }
-            ]
-        };
+            if (channel) {
+                console.log(`Canale trovato per episodio ${epNum}: ${channel.name}`);
+                return {
+                    streams: [
+                        {
+                            title: `Diretta - ${channel.name}`,
+                            url: channel.url,
+                            behaviorHints: { notWebReady: true }
+                        }
+                    ]
+                };
+            }
+        }
     }
     return { streams: [] };
 });
