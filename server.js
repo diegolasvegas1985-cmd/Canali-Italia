@@ -4,8 +4,8 @@ const axios = require('axios');
 const M3U_URL = process.env.M3U_URL || 'https://raw.githubusercontent.com/diegolasvegas1985-cmd/Canali-Italia/refs/heads/main/italy.m3u';
 
 const builder = new addonBuilder({
-    id: 'org.diegolasvegas.tvitalia.grid',
-    version: '1.3.0',
+    id: 'org.diegolasvegas.tvitalia.grid.v2',
+    version: '2.0.0',
     name: 'TV Italia Live',
     description: 'Canali TV italiani in griglia',
     resources: ['catalog', 'meta', 'stream'],
@@ -13,7 +13,7 @@ const builder = new addonBuilder({
     catalogs: [
         {
             type: 'tv',
-            id: 'tv_italia_catalog',
+            id: 'tv_italia_grid_catalog',
             name: 'Canali Italia'
         }
     ]
@@ -52,9 +52,8 @@ async function parseM3U() {
     }
 }
 
-// RESTITUISCE LA GRIGLIA DI TUTTI I CANALI DIRETTAMENTE NELLA HOME
 builder.defineCatalogHandler(async (args) => {
-    if (args.type === 'tv' && args.id === 'tv_italia_catalog') {
+    if (args.type === 'tv' && args.id === 'tv_italia_grid_catalog') {
         const channels = await parseM3U();
         const metas = channels.map(ch => ({
             id: ch.id,
@@ -69,7 +68,6 @@ builder.defineCatalogHandler(async (args) => {
     return { metas: [] };
 });
 
-// METADATI DEL SINGOLO CANALE
 builder.defineMetaHandler(async (args) => {
     if (args.type === 'tv') {
         const channels = await parseM3U();
@@ -98,7 +96,6 @@ builder.defineMetaHandler(async (args) => {
     return { meta: null };
 });
 
-// FORNISCE LO STREAMING DEL CANALE SELEZIONATO
 builder.defineStreamHandler(async (args) => {
     console.log('Richiesta stream per ID:', args.id);
     const channels = await parseM3U();
