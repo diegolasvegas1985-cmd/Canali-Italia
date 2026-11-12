@@ -4,24 +4,23 @@ const axios = require('axios');
 const M3U_URL = process.env.M3U_URL || 'https://raw.githubusercontent.com/diegolasvegas1985-cmd/Canali-Italia/refs/heads/main/italy.m3u';
 
 const builder = new addonBuilder({
-    id: 'org.diegolasvegas.tvitalia.grid.v2',
-    version: '2.0.0',
+    id: 'org.diegolasvegas.tvitalia.fast.color',
+    version: '3.1.0',
     name: 'TV Italia Live',
-    description: 'Canali TV italiani in griglia',
+    description: 'Canali TV italiani con zapping rapido',
     resources: ['catalog', 'meta', 'stream'],
-    types: ['tv'],
+    types: ['series'],
     catalogs: [
         {
-            type: 'tv',
-            id: 'tv_italia_grid_catalog',
-            name: 'Canali Italia'
+            type: 'series',
+            id: 'tv_italia_catalog_fast',
+            name: 'Canali Italia - Zapping'
         }
     ]
 });
 
 async function parseM3U() {
     try {
-        console.log('Scaricamento M3U da:', M3U_URL);
         const response = await axios.get(M3U_URL, { timeout: 10000 });
         const lines = response.data.split(/\r?\n/);
         const channels = [];
@@ -35,16 +34,14 @@ async function parseM3U() {
                 
                 const name = nameMatch ? nameMatch[1].trim() : 'Canale TV';
                 const logo = logoMatch ? logoMatch[1] : '';
-                const id = 'ch_' + Buffer.from(name).toString('hex').slice(0, 16);
 
-                currentChannel = { id, name, logo };
+                currentChannel = { name, logo };
             } else if (line.startsWith('http') && currentChannel) {
                 currentChannel.url = line;
                 channels.push(currentChannel);
                 currentChannel = null;
             }
         }
-        console.log(`Trovati ${channels.length} canali.`);
         return channels;
     } catch (error) {
         console.error('Errore download M3U:', error.message);
@@ -53,65 +50,74 @@ async function parseM3U() {
 }
 
 builder.defineCatalogHandler(async (args) => {
-    if (args.type === 'tv' && args.id === 'tv_italia_grid_catalog') {
-        const channels = await parseM3U();
-        const metas = channels.map(ch => ({
-            id: ch.id,
-            type: 'tv',
-            name: ch.name,
-            poster: ch.logo || 'https://via.placeholder.com/300x450?text=TV+Italia',
-            background: ch.logo || '',
-            description: `Guarda ${ch.name} in diretta`
-        }));
-        return { metas };
+    if (args.type === 'series' && args.id === 'tv_italia_catalog_fast') {
+        return {
+            metas: [
+                {
+                    id: 'tv_italia_fast_container',
+                    type: 'series',
+                    name: 'TV Italia Live',
+                    poster: 'https://placehold.co/300x450/1e293b/38bdf8/png?text=TV&font=montserrat',
+                    background: 'https://placehold.co/1200x675/1e293b/38bdf8/png?text=TV+ITALIA+LIVE&font=montserrat',
+                    description: 'Clicca per aprire la lista e fare zapping dal player.'
+                }
+            ]
+        };
     }
     return { metas: [] };
 });
 
 builder.defineMetaHandler(async (args) => {
-    if (args.type === 'tv') {
+    if (args.type === 'series' && args.id === 'tv_italia_fast_container') {
         const channels = await parseM3U();
-        const channel = channels.find(ch => ch.id === args.id);
-        if (channel) {
+        const videos = channels.map((ch, index) => {
+            const epNum = index + 1;
+            const formattedNum = epNum < 10 ? `0${epNum}` : `${epNum}`;
             return {
-                meta: {
-                    id: channel.id,
-                    type: 'tv',
-                    name: channel.name,
-                    poster: channel.logo || 'https://via.placeholder.com/300x450?text=TV+Italia',
-                    description: `Canale in diretta TV: ${channel.name}`,
-                    videos: [
-                        {
-                            id: channel.id,
-                            title: `${channel.name} - Diretta`,
-                            released: new Date().toISOString(),
-                            season: 1,
-                            episode: 1
-                        }
-                    ]
-                }
+                id: `tv_italia_fast_container:1:${epNum}`,
+                title: `${formattedNum} - ${ch.name}`,
+                released: new Date().toISOString(),
+                season: 1,
+                episode: epNum,
+                thumbnail: ch.logo || 'https://placehold.co/300x170/334155/ffffff/png?text=TV'
             };
-        }
+        });
+
+        return {
+            meta: {
+                id: 'tv_italia_fast_container',
+                type: 'series',
+                name: 'TV Italia Live',
+                poster: 'https://placehold.co/300x450/1e293b/38bdf8/png?text=TV&font=montserrat',
+                background: 'https://placehold.co/1200x675/1e293b/38bdf8/png?text=TV+ITALIA+LIVE&font=montserrat',
+                description: 'Usa il menu laterale del player per cambiare canale all\'istante.',
+                videos: videos
+            }
+        };
     }
     return { meta: null };
 });
 
 builder.defineStreamHandler(async (args) => {
-    console.log('Richiesta stream per ID:', args.id);
-    const channels = await parseM3U();
-    const channel = channels.find(ch => ch.id === args.id);
+    if (args.type === 'series') {
+        const parts = args.id.split(':');
+        if (parts.length === 3) {
+            const epNum = parseInt(parts[2], 10);
+            const channels = await parseM3U();
+            const channel = channels[epNum - 1];
 
-    if (channel) {
-        console.log('Canale trovato:', channel.name);
-        return {
-            streams: [
-                {
-                    title: `Diretta - ${channel.name}`,
-                    url: channel.url,
-                    behaviorHints: { notWebReady: true }
-                }
-            ]
-        };
+            if (channel) {
+                return {
+                    streams: [
+                        {
+                            title: `Diretta - ${channel.name}`,
+                            url: channel.url,
+                            behaviorHints: { notWebReady: true }
+                        }
+                    ]
+                };
+            }
+        }
     }
     return { streams: [] };
 });
